@@ -30,8 +30,8 @@ pub(crate) struct Event<T: NetworkEvent, P: PublicId> {
     // Index of each peer's earliest event that is a descendant of this event.
     pub first_descendants: BTreeMap<P, u64>,
     // The hashes of the oldest events by each peer which comprise not-yet-stable blocks this event can see,
-    // along with the largest payload of all blocks made valid by that event.
-    pub valid_blocks_carried: BTreeMap<P, (Hash, T)>,
+    // along with the sorted payloads of all blocks made valid by that event.
+    pub valid_blocks_carried: BTreeMap<P, (Hash, Vec<T>)>,
     // The set of peers for which this event can strongly-see an event by that peer which carries a
     // valid block.  If there are a supermajority of peers here, this event is an "observer".
     pub observations: BTreeSet<P>,

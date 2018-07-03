@@ -312,7 +312,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         Ok(())
     }
 
-    fn set_valid_blocks_carried(&mut self, event: &mut Event<T, S::PublicId>) -> Result<(), Error> {
+    fn set_valid_blocks_carried(&self, event: &mut Event<T, S::PublicId>) -> Result<(), Error> {
         // If my self_parent already carries a valid block for this peer, use it
         if let Some(self_parent) = self.self_parent(event) {
             event
@@ -329,7 +329,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         // makes a block valid
         if event.valid_blocks_carried.get(event.creator()).is_none() {
             let valid_block_carried = {
-                let payloads_made_valid = self
+                let mut payloads_made_valid = self
                     .peer_manager
                     .iter()
                     .flat_map(|(_peer, events)| {
@@ -347,13 +347,19 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                         } else {
                             None
                         }
-                    });
-                payloads_made_valid.max().map(|max_payload_made_valid| {
-                    (
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                payloads_made_valid.sort();
+                payloads_made_valid.dedup();
+                if payloads_made_valid.is_empty() {
+                    None
+                } else {
+                    Some((
                         event.creator().clone(),
-                        (*event.hash(), max_payload_made_valid.clone()),
-                    )
-                })
+                        (*event.hash(), payloads_made_valid),
+                    ))
+                }
             };
             if let Some((peer, event_with_valid_block)) = valid_block_carried {
                 let _ = event
@@ -701,41 +707,45 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                             }
                         })
                         .cloned()
-                        .collect::<Vec<(Hash, T)>>();
+                        .collect::<Vec<(Hash, Vec<T>)>>();
                     // We sort the events by their payloads to avoid ties when picking the event
                     // with the most represented payload.
                     // Because `max` guarantees that "If several elements are equally
                     // maximum, the last element is returned.", this should be enough to break
                     // any tie.
-                    elected_valid_blocks.sort_by(|(_, lhs_payload), (_, rhs_payload)| {
-                        lhs_payload.cmp(&rhs_payload)
+                    elected_valid_blocks.sort_by(|(_, lhs_payloads), (_, rhs_payloads)| {
+                        lhs_payloads.last().cmp(&rhs_payloads.last())
                     });
                     let payloads = elected_valid_blocks
                         .iter()
-                        .map(|(_hash, payload)| payload)
+                        .map(|(_hash, payloads_carried)| payloads_carried)
                         .collect::<Vec<_>>();
                     let copied_payloads = payloads.clone();
                     copied_payloads
                         .iter()
-                        .max_by(|lhs_payload, rhs_payload| {
+                        .max_by(|lhs_payloads, rhs_payloads| {
                             let lhs_count = payloads
                                 .iter()
-                                .filter(|payload| lhs_payload == payload)
+                                .filter(|payloads_carried| {
+                                    lhs_payloads.last() == payloads_carried.last()
+                                })
                                 .count();
                             let rhs_count = payloads
                                 .iter()
-                                .filter(|payload| rhs_payload == payload)
+                                .filter(|payloads_carried| {
+                                    rhs_payloads.last() == payloads_carried.last()
+                                })
                                 .count();
                             lhs_count.cmp(&rhs_count)
                         })
                         .cloned()
-                        .and_then(|winning_payload| {
+                        .and_then(|winning_payloads| {
                             let votes = self
                                 .events
                                 .iter()
                                 .filter_map(|(_hash, event)| {
                                     event.vote().and_then(|vote| {
-                                        if vote.payload() == winning_payload {
+                                        if Some(vote.payload()) == winning_payloads.last() {
                                             Some((event.creator().clone(), vote.clone()))
                                         } else {
                                             None
@@ -743,7 +753,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                                     })
                                 })
                                 .collect();
-                            Block::new(winning_payload.clone(), &votes).ok()
+                            Block::new(winning_payloads.last().unwrap().clone(), &votes).ok()
                         })
                 }
             })
@@ -759,7 +769,13 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                 .valid_blocks_carried
                 .clone()
                 .into_iter()
-                .filter(|(_peer, (_hash, this_payload))| payload != this_payload)
+                .map(|(peer, (hash, mut these_payloads))| {
+                    if Some(payload) == these_payloads.last() {
+                        let _ = these_payloads.pop();
+                    }
+                    (peer, (hash, these_payloads))
+                })
+                .filter(|(_peer, (_hash, these_payloads))| !these_payloads.is_empty())
                 .collect();
 
             event.valid_blocks_carried = new_valid_blocks;
