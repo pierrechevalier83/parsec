@@ -204,11 +204,11 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         self.peer_manager.add_event(&event)?;
         self.set_last_ancestors(&mut event)?;
         self.set_first_descendants(&mut event)?;
-        self.set_valid_blocks_carried(&mut event)?;
 
         let event_hash = *event.hash();
         self.events_order.push(event_hash);
         let _ = self.events.insert(event_hash, event);
+        self.set_valid_blocks_carried(&event_hash)?;
         self.process_event(&event_hash)
     }
 
@@ -314,55 +314,56 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         Ok(())
     }
 
-    fn set_valid_blocks_carried(&self, event: &mut Event<T, S::PublicId>) -> Result<(), Error> {
-        // If my self_parent already carries a valid block for this peer, use it
-        if let Some(self_parent) = self.self_parent(event) {
-            event
-                .valid_blocks_carried
-                .append(&mut self_parent.valid_blocks_carried.clone())
-        }
-        // If my other_parent already carries a valid block for this peer, use it
-        if let Some(other_parent) = self.other_parent(event) {
-            event
-                .valid_blocks_carried
-                .append(&mut other_parent.valid_blocks_carried.clone())
-        }
-        // See if this event makes any blocks valid
-        let blocks_made_valid = {
-            let all_payloads = self
-                .peer_manager
-                .iter()
-                .flat_map(|(_peer, events)| {
-                    events.iter().filter_map(|(_index, event_hash)| {
-                        self.events
-                            .get(event_hash)
-                            .and_then(|event| event.vote().map(|vote| vote.payload()))
+    fn set_valid_blocks_carried(&mut self, event_hash: &Hash) -> Result<(), Error> {
+        let valid_blocks_carried = {
+            let event = self.events.get(event_hash).ok_or(Error::Logic)?;
+            let mut blocks = event.valid_blocks_carried.clone();
+            // If my self_parent already carries a valid block for this peer, use it
+            if let Some(self_parent) = self.self_parent(event) {
+                blocks.append(&mut self_parent.valid_blocks_carried.clone())
+            }
+            // If my other_parent already carries a valid block for this peer, use it
+            if let Some(other_parent) = self.other_parent(event) {
+                blocks.append(&mut other_parent.valid_blocks_carried.clone())
+            }
+            // See if this event makes any blocks valid
+            let blocks_made_valid = {
+                self
+                    .peer_manager
+                    .iter()
+                    .flat_map(|(_peer, events)| {
+                        events.iter().filter_map(|(_index, hash)| {
+                            self.events
+                                .get(hash)
+                                .and_then(|event| event.vote().map(|vote| vote.payload()))
+                        })
                     })
-                })
-                .collect::<BTreeSet<_>>();
-            all_payloads
-                .into_iter()
-                .filter(|&this_payload| {
-                    self.peer_manager
-                        .is_super_majority(self.n_ancestors_carrying_payload(event, this_payload))
-                })
-                .cloned()
-                .collect::<BTreeSet<T>>()
-        };
-        if !blocks_made_valid.is_empty() {
-            let creator_id = event.creator().clone();
-            let event_hash = *event.hash();
-            match event.valid_blocks_carried.entry(creator_id) {
-                Entry::Occupied(mut occupied) => {
-                    let mut valid_block_carried = &mut occupied.get_mut().1;
-                    valid_block_carried.extend(blocks_made_valid);
-                }
-                Entry::Vacant(vacant) => {
-                    let _ = vacant.insert((event_hash, blocks_made_valid));
+                    .filter(|&this_payload| {
+                        self.peer_manager
+                            .is_super_majority(self.n_ancestors_carrying_payload(event, this_payload))
+                    })
+                    .cloned()
+                    .collect::<BTreeSet<T>>()
+            };
+            if !blocks_made_valid.is_empty() {
+                let creator_id = event.creator().clone();
+                match blocks.entry(creator_id) {
+                    Entry::Occupied(mut occupied) => {
+                        let mut valid_block_carried = &mut occupied.get_mut().1;
+                        valid_block_carried.extend(blocks_made_valid);
+                    }
+                    Entry::Vacant(vacant) => {
+                        let _ = vacant.insert((*event_hash, blocks_made_valid));
+                    }
                 }
             }
-        }
-        Ok(())
+            blocks
+        };
+        self.events
+            .get_mut(event_hash)
+            .map(|ref mut event| event.valid_blocks_carried = valid_blocks_carried)
+            .ok_or(Error::Logic)
+
     }
 
     fn n_ancestors_carrying_payload(&self, event: &Event<T, S::PublicId>, payload: &T) -> usize {
