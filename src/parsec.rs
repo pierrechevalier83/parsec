@@ -328,8 +328,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
             }
             // See if this event makes any blocks valid
             let blocks_made_valid = {
-                self
-                    .peer_manager
+                self.peer_manager
                     .iter()
                     .flat_map(|(_peer, events)| {
                         events.iter().filter_map(|(_index, hash)| {
@@ -339,8 +338,9 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                         })
                     })
                     .filter(|&this_payload| {
-                        self.peer_manager
-                            .is_super_majority(self.n_ancestors_carrying_payload(event, this_payload))
+                        self.peer_manager.is_super_majority(
+                            self.n_ancestors_carrying_payload(event, this_payload),
+                        )
                     })
                     .cloned()
                     .collect::<BTreeSet<T>>()
@@ -363,7 +363,6 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
             .get_mut(event_hash)
             .map(|ref mut event| event.valid_blocks_carried = valid_blocks_carried)
             .ok_or(Error::Logic)
-
     }
 
     fn n_ancestors_carrying_payload(&self, event: &Event<T, S::PublicId>, payload: &T) -> usize {
@@ -697,39 +696,35 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                     // with the most represented payload.
                     elected_valid_blocks.sort_by(
                         |&(_, ref lhs_payloads), &(_, ref rhs_payloads)| {
-                            lhs_payloads.iter().last().cmp(&rhs_payloads.iter().last())
+                            lhs_payloads.cmp(&rhs_payloads)
                         },
                     );
                     let payloads = elected_valid_blocks
                         .iter()
-                        .map(|(_hash, payloads_carried)| payloads_carried)
+                        .flat_map(|(_hash, payloads_carried)| payloads_carried)
                         .collect::<Vec<_>>();
                     let copied_payloads = payloads.clone();
                     copied_payloads
                         .iter()
-                        .max_by(|lhs_payloads, rhs_payloads| {
+                        .max_by(|lhs_payload, rhs_payload| {
                             let lhs_count = payloads
                                 .iter()
-                                .filter(|payloads_carried| {
-                                    lhs_payloads.iter().last() == payloads_carried.iter().last()
-                                })
+                                .filter(|payload_carried| lhs_payload == payload_carried)
                                 .count();
                             let rhs_count = payloads
                                 .iter()
-                                .filter(|payloads_carried| {
-                                    rhs_payloads.iter().last() == payloads_carried.iter().last()
-                                })
+                                .filter(|payload_carried| rhs_payload == payload_carried)
                                 .count();
                             lhs_count.cmp(&rhs_count)
                         })
                         .cloned()
-                        .and_then(|winning_payloads| {
+                        .and_then(|winning_payload| {
                             let votes = self
                                 .events
                                 .iter()
                                 .filter_map(|(_hash, event)| {
                                     event.vote().and_then(|vote| {
-                                        if Some(vote.payload()) == winning_payloads.iter().last() {
+                                        if vote.payload() == winning_payload {
                                             Some((event.creator().clone(), vote.clone()))
                                         } else {
                                             None
@@ -737,7 +732,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                                     })
                                 })
                                 .collect();
-                            Block::new(winning_payloads.iter().last().unwrap().clone(), &votes).ok()
+                            Block::new(winning_payload.clone(), &votes).ok()
                         })
                 }
             })
