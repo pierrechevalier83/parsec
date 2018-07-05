@@ -17,7 +17,9 @@ use meta_vote::{MetaVote, Step};
 use network_event::NetworkEvent;
 use peer_manager::PeerManager;
 use round_hash::RoundHash;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::mem;
 
 /// The main object which manages creating and receiving gossip about network events from peers, and
 /// which provides a sequence of consensused `Block`s by applying the PARSEC algorithm.
@@ -325,79 +327,62 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                 .valid_blocks_carried
                 .append(&mut other_parent.valid_blocks_carried.clone())
         }
-        // If none of my parents already carries a valid block for this peer, see if this event
-        // makes a block valid
-        if event.valid_blocks_carried.get(event.creator()).is_none() {
-            let valid_block_carried = {
-                let mut payloads_made_valid = self
-                    .peer_manager
-                    .iter()
-                    .flat_map(|(_peer, events)| {
-                        events.iter().filter_map(|(_index, event_hash)| {
-                            self.events
-                                .get(event_hash)
-                                .map(|event| event.vote().map(|vote| vote.payload()))
-                        })
+        // See if this event makes any blocks valid
+        let blocks_made_valid = {
+            let all_payloads = self
+                .peer_manager
+                .iter()
+                .flat_map(|(_peer, events)| {
+                    events.iter().filter_map(|(_index, event_hash)| {
+                        self.events
+                            .get(event_hash)
+                            .and_then(|event| event.vote().map(|vote| vote.payload()))
                     })
-                    .filter_map(|this_payload| {
-                        if self.peer_manager.is_super_majority(
-                            self.n_ancestors_carrying_payload(event, &this_payload),
-                        ) {
-                            this_payload
-                        } else {
-                            None
-                        }
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>();
-                payloads_made_valid.sort();
-                payloads_made_valid.dedup();
-                if payloads_made_valid.is_empty() {
-                    None
-                } else {
-                    Some((
-                        event.creator().clone(),
-                        (*event.hash(), payloads_made_valid),
-                    ))
+                })
+                .collect::<BTreeSet<_>>();
+            all_payloads
+                .into_iter()
+                .filter(|&this_payload| {
+                    self.peer_manager
+                        .is_super_majority(self.n_ancestors_carrying_payload(event, this_payload))
+                })
+                .cloned()
+                .collect::<BTreeSet<T>>()
+        };
+        if !blocks_made_valid.is_empty() {
+            let creator_id = event.creator().clone();
+            let event_hash = *event.hash();
+            match event.valid_blocks_carried.entry(creator_id) {
+                Entry::Occupied(mut occupied) => {
+                    let mut valid_block_carried = &mut occupied.get_mut().1;
+                    valid_block_carried.extend(blocks_made_valid);
                 }
-            };
-            if let Some((peer, event_with_valid_block)) = valid_block_carried {
-                let _ = event
-                    .valid_blocks_carried
-                    .insert(peer, event_with_valid_block);
+                Entry::Vacant(vacant) => {
+                    let _ = vacant.insert((event_hash, blocks_made_valid));
+                }
             }
         }
         Ok(())
     }
 
-    fn n_ancestors_carrying_payload(
-        &self,
-        event: &Event<T, S::PublicId>,
-        payload: &Option<&T>,
-    ) -> usize {
+    fn n_ancestors_carrying_payload(&self, event: &Event<T, S::PublicId>, payload: &T) -> usize {
         let payload_already_reached_consensus = self.consensus_history.iter().any(|payload_hash| {
-            Some(*payload_hash) == payload.and_then(|payload| {
+            Some(*payload_hash) == {
                 let serialised = serialise(&payload).ok();
                 serialised.map(|bytes| Hash::from(bytes.as_slice()))
-            })
+            }
         });
         if payload_already_reached_consensus {
             return 0;
         }
-        let my_payload = if event.vote().map(|vote| vote.payload()) == *payload {
-            1
-        } else {
-            0
-        };
-        let my_ancestors_payload = self
-            .peer_manager
+        self.peer_manager
             .iter()
             .filter(|(peer, events)| {
                 events.iter().any(|(_index, event_hash)| {
                     let last_ancestor_index = &event.last_ancestors.get(peer);
                     match self.events.get(event_hash) {
                         Some(that_event) => {
-                            (*payload == that_event.vote().map(|vote| vote.payload()))
+                            (Some(payload) == that_event.vote().map(|vote| vote.payload()))
                                 && (last_ancestor_index.map_or(false, |last_index| {
                                     that_event
                                         .index
@@ -408,8 +393,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                     }
                 })
             })
-            .count();
-        my_payload + my_ancestors_payload
+            .count()
     }
 
     fn set_observations(&mut self, event_hash: &Hash) -> Result<(), Error> {
@@ -707,15 +691,14 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                             }
                         })
                         .cloned()
-                        .collect::<Vec<(Hash, Vec<T>)>>();
+                        .collect::<Vec<(Hash, BTreeSet<T>)>>();
                     // We sort the events by their payloads to avoid ties when picking the event
                     // with the most represented payload.
-                    // Because `max` guarantees that "If several elements are equally
-                    // maximum, the last element is returned.", this should be enough to break
-                    // any tie.
-                    elected_valid_blocks.sort_by(|(_, lhs_payloads), (_, rhs_payloads)| {
-                        lhs_payloads.last().cmp(&rhs_payloads.last())
-                    });
+                    elected_valid_blocks.sort_by(
+                        |&(_, ref lhs_payloads), &(_, ref rhs_payloads)| {
+                            lhs_payloads.iter().last().cmp(&rhs_payloads.iter().last())
+                        },
+                    );
                     let payloads = elected_valid_blocks
                         .iter()
                         .map(|(_hash, payloads_carried)| payloads_carried)
@@ -727,13 +710,13 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                             let lhs_count = payloads
                                 .iter()
                                 .filter(|payloads_carried| {
-                                    lhs_payloads.last() == payloads_carried.last()
+                                    lhs_payloads.iter().last() == payloads_carried.iter().last()
                                 })
                                 .count();
                             let rhs_count = payloads
                                 .iter()
                                 .filter(|payloads_carried| {
-                                    rhs_payloads.last() == payloads_carried.last()
+                                    rhs_payloads.iter().last() == payloads_carried.iter().last()
                                 })
                                 .count();
                             lhs_count.cmp(&rhs_count)
@@ -745,7 +728,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                                 .iter()
                                 .filter_map(|(_hash, event)| {
                                     event.vote().and_then(|vote| {
-                                        if Some(vote.payload()) == winning_payloads.last() {
+                                        if Some(vote.payload()) == winning_payloads.iter().last() {
                                             Some((event.creator().clone(), vote.clone()))
                                         } else {
                                             None
@@ -753,7 +736,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                                     })
                                 })
                                 .collect();
-                            Block::new(winning_payloads.last().unwrap().clone(), &votes).ok()
+                            Block::new(winning_payloads.iter().last().unwrap().clone(), &votes).ok()
                         })
                 }
             })
@@ -765,20 +748,19 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         self.meta_votes = BTreeMap::new();
         self.events.iter_mut().for_each(|(_hash, event)| {
             event.observations = BTreeSet::new();
-            let new_valid_blocks = event
-                .valid_blocks_carried
-                .clone()
+            let mut valid_blocks = mem::replace(&mut event.valid_blocks_carried, BTreeMap::new());
+            valid_blocks = valid_blocks
                 .into_iter()
-                .map(|(peer, (hash, mut these_payloads))| {
-                    if Some(payload) == these_payloads.last() {
-                        let _ = these_payloads.pop();
+                .filter_map(|(peer, (hash, mut these_payloads))| {
+                    let _ = these_payloads.remove(payload);
+                    if these_payloads.is_empty() {
+                        None
+                    } else {
+                        Some((peer, (hash, these_payloads)))
                     }
-                    (peer, (hash, these_payloads))
                 })
-                .filter(|(_peer, (_hash, these_payloads))| !these_payloads.is_empty())
                 .collect();
-
-            event.valid_blocks_carried = new_valid_blocks;
+            let _ = mem::replace(&mut event.valid_blocks_carried, valid_blocks);
         });
     }
 
