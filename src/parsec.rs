@@ -228,6 +228,12 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         self.set_meta_votes(event_hash)?;
         self.update_round_hashes(event_hash)?;
         if let Some(block) = self.next_stable_block() {
+            if format!("{:?}", self.our_pub_id()) == "Bob" {
+                for h in &self.events_order {
+                    println!("{:?}", self.events[&h]);
+                }
+                println!("\n\n");
+            }
             dump_graph::to_file(self.our_pub_id(), &self.events, &self.meta_votes);
             self.clear_consensus_data(block.payload());
             let block_hash = Hash::from(serialise(&block)?.as_slice());
@@ -369,8 +375,8 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                 let creator_id = event.creator().clone();
                 match blocks.entry(creator_id) {
                     Entry::Occupied(mut occupied) => {
-                        let mut valid_block_carried = &mut occupied.get_mut().1;
-                        valid_block_carried.extend(blocks_made_valid);
+                        let mut valid_blocks_carried = &mut occupied.get_mut().1;
+                        valid_blocks_carried.extend(blocks_made_valid);
                     }
                     Entry::Vacant(vacant) => {
                         let _ = vacant.insert((*event_hash, blocks_made_valid));
@@ -379,10 +385,15 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
             }
             blocks
         };
-        self.events
+        let res = self
+            .events
             .get_mut(event_hash)
             .map(|ref mut event| event.valid_blocks_carried = valid_blocks_carried)
-            .ok_or(Error::Logic)
+            .ok_or(Error::Logic);
+        if format!("{:?}", self.our_pub_id()) == "Bobr" {
+            println!("{:?}\n\n", self.events);
+        }
+        res
     }
 
     fn n_ancestors_carrying_payload(&self, event: &Event<T, S::PublicId>, payload: &T) -> usize {
@@ -395,7 +406,8 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         if payload_already_reached_consensus {
             return 0;
         }
-        self.peer_manager
+        let result = self
+            .peer_manager
             .iter()
             .filter(|(_peer, events)| {
                 events
@@ -412,7 +424,9 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                         None => false,
                     })
             })
-            .count()
+            .count();
+        assert!(result <= self.peer_manager.iter().count());
+        result
     }
 
     fn set_observations(&mut self, event_hash: &Hash) -> Result<(), Error> {
@@ -682,6 +696,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
     }
 
     fn next_stable_block(&mut self) -> Option<Block<T, S::PublicId>> {
+        let our_id = format!("{:?}", self.our_pub_id());
         self.our_last_event_hash()
             .and_then(|hash| self.meta_votes.get(&hash))
             .and_then(|our_last_meta_votes| {
@@ -718,6 +733,10 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                             lhs_payloads.cmp(&rhs_payloads)
                         },
                     );
+                    if our_id == "Alice" || our_id == "Bob" {
+                        println!("{:?} in next_stable_block", our_id);
+                        println!("elected_valid_blocks: {:?}", elected_valid_blocks);
+                    }
                     let payloads = elected_valid_blocks
                         .iter()
                         .flat_map(|(_hash, payloads_carried)| payloads_carried)
@@ -738,6 +757,9 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                         })
                         .cloned()
                         .and_then(|winning_payload| {
+                            if our_id == "Alice" || our_id == "Bob" {
+                                println!("winning_payload: {:?}\n", winning_payload);
+                            }
                             let votes = self
                                 .events
                                 .iter()
