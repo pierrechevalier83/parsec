@@ -320,11 +320,31 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
             let mut blocks = event.valid_blocks_carried.clone();
             // If my self_parent already carries a valid block for this peer, use it
             if let Some(self_parent) = self.self_parent(event) {
-                blocks.append(&mut self_parent.valid_blocks_carried.clone())
+                let mut parent_blocks = self_parent.valid_blocks_carried.clone();
+                for (peer, (hash, payloads)) in &mut blocks {
+                    let _ = parent_blocks
+                        .remove(peer)
+                        .map(|(parent_hash, mut parent_payloads)| {
+                            if parent_hash == *hash {
+                                payloads.append(&mut parent_payloads)
+                            }
+                        });
+                }
+                blocks.append(&mut parent_blocks);
             }
             // If my other_parent already carries a valid block for this peer, use it
             if let Some(other_parent) = self.other_parent(event) {
-                blocks.append(&mut other_parent.valid_blocks_carried.clone())
+                let mut parent_blocks = other_parent.valid_blocks_carried.clone();
+                for (peer, (hash, payloads)) in &mut blocks {
+                    let _ = parent_blocks
+                        .remove(peer)
+                        .map(|(parent_hash, mut parent_payloads)| {
+                            if parent_hash == *hash {
+                                payloads.append(&mut parent_payloads)
+                            }
+                        });
+                }
+                blocks.append(&mut parent_blocks);
             }
             // See if this event makes any blocks valid
             let blocks_made_valid = {
