@@ -17,9 +17,7 @@ use meta_vote::{MetaVote, Step};
 use network_event::NetworkEvent;
 use peer_manager::PeerManager;
 use round_hash::RoundHash;
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::mem;
 
 /// The main object which manages creating and receiving gossip about network events from peers, and
 /// which provides a sequence of consensused `Block`s by applying the PARSEC algorithm.
@@ -30,6 +28,8 @@ pub struct Parsec<T: NetworkEvent, S: SecretId> {
     events: BTreeMap<Hash, Event<T, S::PublicId>>,
     // The sequence in which all gossip events were added to this `Parsec`.
     events_order: Vec<Hash>,
+    // The hash of the oldest event for each peer that has a non-empty set of `valid_blocks_carried`
+    oldest_events_with_valid_blocks: BTreeMap<S::PublicId, Hash>,
     // Consensused network events that have not been returned via `poll()` yet.
     consensused_blocks: VecDeque<Block<T, S::PublicId>>,
     // Hash of all payloads that were consensused ever
@@ -60,6 +60,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
             peer_manager,
             events: BTreeMap::new(),
             events_order: vec![],
+            oldest_events_with_valid_blocks: BTreeMap::new(),
             consensused_blocks: VecDeque::new(),
             consensus_history: vec![],
             meta_votes: BTreeMap::new(),
@@ -321,70 +322,35 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
     }
 
     fn set_valid_blocks_carried(&mut self, event_hash: &Hash) -> Result<(), Error> {
+        // Collect paylodas from any block made valid by this event
         let valid_blocks_carried = {
             let event = self.events.get(event_hash).ok_or(Error::Logic)?;
-            let mut blocks = event.valid_blocks_carried.clone();
-            // If my self_parent already carries a valid block for this peer, use it
-            if let Some(self_parent) = self.self_parent(event) {
-                let mut parent_blocks = self_parent.valid_blocks_carried.clone();
-                for (peer, (hash, payloads)) in &mut blocks {
-                    let _ = parent_blocks
-                        .remove(peer)
-                        .map(|(parent_hash, mut parent_payloads)| {
-                            if parent_hash == *hash {
-                                payloads.append(&mut parent_payloads)
-                            }
-                        });
-                }
-                blocks.append(&mut parent_blocks);
-            }
-            // If my other_parent already carries a valid block for this peer, use it
-            if let Some(other_parent) = self.other_parent(event) {
-                let mut parent_blocks = other_parent.valid_blocks_carried.clone();
-                for (peer, (hash, payloads)) in &mut blocks {
-                    let _ = parent_blocks
-                        .remove(peer)
-                        .map(|(parent_hash, mut parent_payloads)| {
-                            if parent_hash == *hash {
-                                payloads.append(&mut parent_payloads)
-                            }
-                        });
-                }
-                blocks.append(&mut parent_blocks);
-            }
-            // See if this event makes any blocks valid
-            let blocks_made_valid = {
-                self.peer_manager
-                    .iter()
-                    .flat_map(|(_peer, events)| {
-                        events.iter().filter_map(|(_index, hash)| {
-                            self.events
-                                .get(hash)
-                                .and_then(|event| event.vote().map(|vote| vote.payload()))
-                        })
+            self.peer_manager
+                .iter()
+                .flat_map(|(_peer, events)| {
+                    events.iter().filter_map(|(_index, hash)| {
+                        self.events
+                            .get(hash)
+                            .and_then(|event| event.vote().map(|vote| vote.payload()))
                     })
-                    .filter(|&this_payload| {
-                        self.peer_manager.is_super_majority(
-                            self.n_ancestors_carrying_payload(event, this_payload),
-                        )
-                    })
-                    .cloned()
-                    .collect::<BTreeSet<T>>()
-            };
-            if !blocks_made_valid.is_empty() {
-                let creator_id = event.creator().clone();
-                match blocks.entry(creator_id) {
-                    Entry::Occupied(mut occupied) => {
-                        let mut valid_blocks_carried = &mut occupied.get_mut().1;
-                        valid_blocks_carried.extend(blocks_made_valid);
-                    }
-                    Entry::Vacant(vacant) => {
-                        let _ = vacant.insert((*event_hash, blocks_made_valid));
-                    }
-                }
-            }
-            blocks
+                })
+                .filter(|&this_payload| {
+                    self.peer_manager
+                        .is_super_majority(self.n_ancestors_carrying_payload(event, this_payload))
+                })
+                .cloned()
+                .collect::<BTreeSet<T>>()
         };
+        // If this peer doesn't yet have an oldest event with valid blocks and this event does make
+        // at least one block valid, insert this hash into self.oldest_events_with_valid_blocks
+        if !valid_blocks_carried.is_empty() {
+            let event = self.events.get(event_hash).ok_or(Error::Logic)?;
+            let creator_id = event.creator().clone();
+            let _ = self
+                .oldest_events_with_valid_blocks
+                .entry(creator_id)
+                .or_insert(*event_hash);
+        }
         let res = self
             .events
             .get_mut(event_hash)
@@ -432,10 +398,9 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
     fn set_observations(&mut self, event_hash: &Hash) -> Result<(), Error> {
         let observations = {
             let event = self.events.get(event_hash).ok_or(Error::Logic)?;
-            event
-                .valid_blocks_carried
+            self.oldest_events_with_valid_blocks
                 .iter()
-                .filter_map(|(peer, (old_hash, _payload))| {
+                .filter_map(|(peer, old_hash)| {
                     let old_event = self.events.get(old_hash)?;
                     if self.does_strongly_see(event, old_event) {
                         Some(peer)
@@ -714,32 +679,27 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                 if our_decided_meta_votes.clone().count() < self.peer_manager.all_ids().len() {
                     None
                 } else {
-                    let mut elected_valid_blocks = our_decided_meta_votes
+                    let elected_valid_blocks = our_decided_meta_votes
                         .filter_map(|(id, vote)| {
                             if vote.decision == Some(true) {
-                                self.our_last_event_hash()
+                                self.oldest_events_with_valid_blocks
+                                    .get(&id)
                                     .and_then(|hash| self.events.get(&hash))
-                                    .and_then(|last_event| last_event.valid_blocks_carried.get(&id))
+                                    .map(|oldest_event| oldest_event.valid_blocks_carried.clone())
                             } else {
                                 None
                             }
                         })
-                        .cloned()
-                        .collect::<Vec<(Hash, BTreeSet<T>)>>();
-                    // We sort the events by their payloads to avoid ties when picking the event
+                        .collect::<Vec<BTreeSet<T>>>();
+                    // This is sorted by peer_ids, which should avoid ties when picking the event
                     // with the most represented payload.
-                    elected_valid_blocks.sort_by(
-                        |&(_, ref lhs_payloads), &(_, ref rhs_payloads)| {
-                            lhs_payloads.cmp(&rhs_payloads)
-                        },
-                    );
                     if our_id == "Alice" || our_id == "Bob" {
                         println!("{:?} in next_stable_block", our_id);
                         println!("elected_valid_blocks: {:?}", elected_valid_blocks);
                     }
                     let payloads = elected_valid_blocks
                         .iter()
-                        .flat_map(|(_hash, payloads_carried)| payloads_carried)
+                        .flat_map(|payloads_carried| payloads_carried)
                         .collect::<Vec<_>>();
                     let copied_payloads = payloads.clone();
                     copied_payloads
@@ -785,19 +745,22 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         self.meta_votes = BTreeMap::new();
         self.events.iter_mut().for_each(|(_hash, event)| {
             event.observations = BTreeSet::new();
-            let mut valid_blocks = mem::replace(&mut event.valid_blocks_carried, BTreeMap::new());
-            valid_blocks = valid_blocks
-                .into_iter()
-                .filter_map(|(peer, (hash, mut these_payloads))| {
-                    let _ = these_payloads.remove(payload);
-                    if these_payloads.is_empty() {
-                        None
-                    } else {
-                        Some((peer, (hash, these_payloads)))
-                    }
-                })
-                .collect();
-            let _ = mem::replace(&mut event.valid_blocks_carried, valid_blocks);
+            let _ = event.valid_blocks_carried.remove(payload);
+            if event.valid_blocks_carried.is_empty() {
+                let id = event.creator();
+                let new_oldest_event = self
+                    .events_order
+                    .iter()
+                    .filter(|hash| {
+                        // TODO: don't panic
+                        let that_event = self.events[hash];
+                        that_event.creator() == id && !that_event.valid_blocks_carried.is_empty()
+                    })
+                    .take(1)
+                    .next();
+                let _ = new_oldest_event
+                    .map(|new_event| self.oldest_events_with_valid_blocks.insert(*id, *new_event));
+            }
         });
     }
 

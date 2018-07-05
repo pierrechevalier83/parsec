@@ -276,13 +276,16 @@ mod detail {
             for (event_hash, payload) in event.valid_blocks_carried.values() {
                 let that_event = &gossip_graph[event_hash];
                 writeln!(
-                writer,
-                " \"{:?}\" [shape=rectangle, style=filled, fillcolor=crimson, label=\"{}_{}\n{:?}\"]",
-                event_hash,
-                first_char(that_event.creator()).unwrap_or('Z'),
-                that_event.index.unwrap_or(0),
-                payload
-            )?;
+                    writer,
+                    " \"{:?}\" [shape=rectangle, style=filled, fillcolor=crimson, label=\"{}_{}\n",
+                    event_hash,
+                    first_char(that_event.creator()).unwrap_or('Z'),
+                    that_event.index.unwrap_or(0)
+                )?;
+                if let Some(event_payload) = event.vote().map(|vote| vote.payload()) {
+                    write!(writer, "\n{:?}", event_payload)?;
+                }
+                writeln!(writer, "{:?}\"]", payload)?;
             }
             if meta_votes.get(event_hash).is_some() {
                 writeln!(writer, " \"{:?}\" [shape=rectangle]", event.hash())?;
