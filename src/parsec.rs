@@ -740,12 +740,16 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         self.round_hashes = BTreeMap::new();
         self.meta_votes = BTreeMap::new();
 
+        let mut events_made_empty: Vec<Hash> = vec![];
         for event in self.events.values_mut() {
             event.observations = BTreeSet::new();
-            let _ = event.valid_blocks_carried.remove(payload);
+            let removed = event.valid_blocks_carried.remove(payload);
+            if removed && event.valid_blocks_carried.is_empty() {
+                events_made_empty.push(event.hash().clone())
+            }
         }
-        for event in self.events.values() {
-            if event.valid_blocks_carried.is_empty() {
+        for event_hash in &events_made_empty {
+            if let Some(event) = self.events.get(event_hash) {
                 let id = event.creator();
                 if let Some(hashes) = self.events_with_valid_blocks.get_mut(id) {
                     let _ = hashes.pop_front();
