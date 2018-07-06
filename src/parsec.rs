@@ -743,9 +743,12 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         // Clear all leftover data from previous consensus
         self.round_hashes = BTreeMap::new();
         self.meta_votes = BTreeMap::new();
-        self.events.iter_mut().for_each(|(_hash, event)| {
+
+        for event in self.events.values_mut() {
             event.observations = BTreeSet::new();
             let _ = event.valid_blocks_carried.remove(payload);
+        }
+        for event in self.events.values() {
             if event.valid_blocks_carried.is_empty() {
                 let id = event.creator();
                 let new_oldest_event = self
@@ -753,15 +756,18 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                     .iter()
                     .filter(|hash| {
                         // TODO: don't panic
-                        let that_event = self.events[hash];
+                        let that_event = &self.events[hash];
                         that_event.creator() == id && !that_event.valid_blocks_carried.is_empty()
                     })
                     .take(1)
                     .next();
-                let _ = new_oldest_event
-                    .map(|new_event| self.oldest_events_with_valid_blocks.insert(*id, *new_event));
+                if let Some(new_event) = new_oldest_event {
+                    let _ = self
+                        .oldest_events_with_valid_blocks
+                        .insert(id.clone(), *new_event);
+                }
             }
-        });
+        }
     }
 
     fn restart_consensus(&mut self, latest_block_hash: &Hash) -> Result<(), Error> {

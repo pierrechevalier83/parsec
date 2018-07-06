@@ -230,11 +230,26 @@ mod detail {
         initial_events: &[Hash],
     ) -> io::Result<()> {
         for (event_hash, event) in gossip_graph.iter() {
-            // Write the label
+            // Write the `valid_blocks_carried` if have
+            if !event.valid_blocks_carried.is_empty() {
+                writeln!(
+                    writer,
+                    " \"{:?}\" [shape=rectangle, style=filled, fillcolor=crimson, label=\"{}_{}",
+                    event_hash,
+                    first_char(event.creator()).unwrap_or('Z'),
+                    event.index.unwrap_or(0)
+                )?;
+                if let Some(event_payload) = event.vote().map(|vote| vote.payload()) {
+                    write!(writer, "\n{:?}", event_payload)?;
+                }
+                writeln!(writer, "{:?}\"]", event.valid_blocks_carried)?;
+            }
+
+            // Write the `meta_votes` if have
             write!(writer, " \"{:?}\" ", event.hash())?;
             write!(
                 writer,
-                " [label=\"{}_{}",
+                " [fillcolor=white, label=\"{}_{}",
                 first_char(event.creator()).unwrap_or('E'),
                 event.index.unwrap_or(0)
             )?;
@@ -272,23 +287,6 @@ mod detail {
                     " \"{:?}\" [shape=rectangle, style=filled, fillcolor=cyan]",
                     event.hash()
                 )?;
-            }
-            for (event_hash, payload) in event.valid_blocks_carried.values() {
-                let that_event = &gossip_graph[event_hash];
-                writeln!(
-                    writer,
-                    " \"{:?}\" [shape=rectangle, style=filled, fillcolor=crimson, label=\"{}_{}\n",
-                    event_hash,
-                    first_char(that_event.creator()).unwrap_or('Z'),
-                    that_event.index.unwrap_or(0)
-                )?;
-                if let Some(event_payload) = event.vote().map(|vote| vote.payload()) {
-                    write!(writer, "\n{:?}", event_payload)?;
-                }
-                writeln!(writer, "{:?}\"]", payload)?;
-            }
-            if meta_votes.get(event_hash).is_some() {
-                writeln!(writer, " \"{:?}\" [shape=rectangle]", event.hash())?;
             }
         }
 
