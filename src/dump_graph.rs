@@ -230,21 +230,6 @@ mod detail {
         initial_events: &[Hash],
     ) -> io::Result<()> {
         for (event_hash, event) in gossip_graph.iter() {
-            // Write the `valid_blocks_carried` if have
-            if !event.valid_blocks_carried.is_empty() {
-                writeln!(
-                    writer,
-                    " \"{:?}\" [shape=rectangle, style=filled, fillcolor=crimson, label=\"{}_{}",
-                    event_hash,
-                    first_char(event.creator()).unwrap_or('Z'),
-                    event.index.unwrap_or(0)
-                )?;
-                if let Some(event_payload) = event.vote().map(|vote| vote.payload()) {
-                    write!(writer, "\n{:?}", event_payload)?;
-                }
-                writeln!(writer, "{:?}\"]", event.valid_blocks_carried)?;
-            }
-
             // Write the `meta_votes` if have
             write!(writer, " \"{:?}\" ", event.hash())?;
             write!(
@@ -280,6 +265,20 @@ mod detail {
                 }
             }
             writeln!(writer, "\"]")?;
+            // Write the `valid_blocks_carried` if have
+            if !event.valid_blocks_carried.is_empty() {
+                writeln!(
+                    writer,
+                    " \"{:?}\" [shape=rectangle, style=filled, fillcolor=crimson, label=\"{}_{}",
+                    event_hash,
+                    first_char(event.creator()).unwrap_or('Z'),
+                    event.index.unwrap_or(0)
+                )?;
+                if let Some(event_payload) = event.vote().map(|vote| vote.payload()) {
+                    write!(writer, "\n{:?}", event_payload)?;
+                }
+                writeln!(writer, "{:?}\"]", event.valid_blocks_carried)?;
+            }
             // Add any styling
             if event.vote().is_some() {
                 writeln!(
