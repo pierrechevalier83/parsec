@@ -380,17 +380,16 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         }
         self.peer_manager
             .iter()
-            .filter(|(_peer, events)| {
+            .filter(|(peer, events)| {
                 events
                     .iter()
-                    .any(|(_index, event_hash)| match self.events.get(event_hash) {
+                    .any(|(index, event_hash)| match self.events.get(event_hash) {
                         Some(that_event) => {
-                            (Some(payload) == that_event.vote().map(|vote| vote.payload()))
-                                && (event.index.map_or(false, |last_index| {
-                                    that_event
-                                        .index
-                                        .map_or(false, |that_index| last_index >= that_index)
-                                }))
+                            (Some(payload) == that_event.vote().map(|vote| vote.payload())
+                                && (event
+                                    .last_ancestors
+                                    .get(peer)
+                                    .map_or(false, |last_index| last_index >= index)))
                         }
                         None => false,
                     })
