@@ -6,10 +6,16 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
+use error::Error;
+use gossip::Event;
+use hash::Hash;
 use id::{PublicId, SecretId};
+use meta_vote::MetaVote;
 use network_event::NetworkEvent;
 use rand::{Rand, Rng};
+use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::path::Path;
 
 const NAMES: &[&str] = &[
     "Alice", "Bob", "Carol", "Dave", "Eric", "Fred", "Gina", "Hank", "Iris", "Judy", "Kent",
@@ -95,4 +101,15 @@ pub fn create_ids(count: usize) -> Vec<PeerId> {
 
 pub fn names_len() -> usize {
     NAMES.len()
+}
+
+#[allow(unused)]
+pub struct ParsedContent {
+    events: BTreeMap<Hash, Event<Transaction, PeerId>>,
+    events_order: Vec<Hash>,
+    meta_votes: BTreeMap<Hash, BTreeMap<PeerId, Vec<MetaVote>>>,
+}
+
+pub fn parse_dot_file(_filename: &Path) -> Result<ParsedContent, Error> {
+    unimplemented!();
 }
