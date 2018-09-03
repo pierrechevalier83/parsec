@@ -75,6 +75,10 @@ extern crate serde;
 extern crate serde_derive;
 extern crate tiny_keccak;
 
+#[cfg(test)]
+#[macro_use]
+extern crate unwrap;
+
 mod block;
 mod dump_graph;
 mod error;

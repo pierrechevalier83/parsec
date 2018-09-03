@@ -105,11 +105,47 @@ pub fn names_len() -> usize {
 
 #[allow(unused)]
 pub struct ParsedContent {
-    events: BTreeMap<Hash, Event<Transaction, PeerId>>,
-    events_order: Vec<Hash>,
-    meta_votes: BTreeMap<Hash, BTreeMap<PeerId, Vec<MetaVote>>>,
+    pub(crate) events: BTreeMap<Hash, Event<Transaction, PeerId>>,
+    pub(crate) events_order: Vec<Hash>,
+    pub(crate) meta_votes: BTreeMap<Hash, BTreeMap<PeerId, Vec<MetaVote>>>,
 }
 
 pub fn parse_dot_file(_filename: &Path) -> Result<ParsedContent, Error> {
     unimplemented!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn dot_parser_fails_with_unexisting_path() {
+        let file = Path::new("tests/dot_input/does_not_exist.dot");
+        assert!(!file.exists());
+        assert!(parse_dot_file(file).is_err());
+    }
+
+    #[test]
+    fn dot_parser_fails_with_invalid_syntax() {
+        let file = Path::new("tests/dot_input/invalid_syntax.dot");
+        assert!(file.exists());
+        assert!(parse_dot_file(file).is_err());
+    }
+
+    #[test]
+    fn dot_parser_fails_with_no_graph() {
+        let file = Path::new("tests/dot_input/no_graph.dot");
+        assert!(file.exists());
+        assert!(parse_dot_file(file).is_err());
+    }
+
+    #[test]
+    fn dot_parser_succeeds_with_empty_graph() {
+        let file = Path::new("tests/dot_input/empty_graph.dot");
+        assert!(file.exists());
+        let parsed = unwrap!(parse_dot_file(file));
+        assert!(parsed.events.is_empty());
+        assert!(parsed.events_order.is_empty());
+        assert!(parsed.meta_votes.is_empty());
+    }
+
 }

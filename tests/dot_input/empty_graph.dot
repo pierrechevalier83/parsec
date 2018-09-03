@@ -1,0 +1,6 @@
+digraph GossipGraph {
+    subgraph cluster_Alice {
+    	label=Alice
+	Alice [style=invis]
+    }
+}
