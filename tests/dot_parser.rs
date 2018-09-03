@@ -61,5 +61,14 @@ use std::path::Path;
 
 #[test]
 fn dot_parser_fails_with_unexisting_path() {
-    assert!(parse_dot_file(Path::new("/does/not/exist.dot")).is_err());
+    let does_not_exist = Path::new("tests/dot_input/does_not_exist.dot");
+    assert!(!does_not_exist.exists());
+    assert!(parse_dot_file(Path::new(does_not_exist)).is_err());
+}
+
+#[test]
+fn dot_parser_fails_with_invalid_syntax() {
+    let invalid_syntax = Path::new("tests/dot_input/invalid_syntax.dot");
+    assert!(invalid_syntax.exists());
+    assert!(parse_dot_file(invalid_syntax).is_err());
 }
