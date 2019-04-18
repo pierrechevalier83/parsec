@@ -735,7 +735,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
             return Ok(PostProcessAction::Continue);
         }
 
-        self.output_consensus_info(&payload_keys);
+        // self.output_consensus_info(&payload_keys);
 
         let blocks = self.create_blocks(&payload_keys)?;
         if !blocks.is_empty() {
@@ -2403,6 +2403,11 @@ impl TestParsec<Transaction, PeerId> {
         &mut self,
         packed_event: PackedEvent<Transaction, PeerId>,
     ) -> Result<EventIndex> {
+        if let err = Err(self.0.unpack(packed_event)) {
+            self.output_consensus_info(&payload_keys);
+            return err;
+        }
+
         match self.0.unpack(packed_event)? {
             Some(event) => self.0.add_event(event),
             None => Err(Error::Logic),
