@@ -1093,9 +1093,15 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
             };
 
             for (peer_index, temp_votes) in &context.temp_votes {
+                let other_votes = Self::peer_meta_votes(&ancestors_meta_votes, peer_index);
                 let coin_tosses = self.toss_coins(&voters, peer_index, temp_votes, &context)?;
-                let final_meta_votes =
-                    MetaVote::next_final(temp_votes, &coin_tosses, voters.len(), is_voter);
+                let final_meta_votes = MetaVote::next_final(
+                    temp_votes,
+                    &other_votes,
+                    &coin_tosses,
+                    voters.len(),
+                    is_voter,
+                );
 
                 builder.add_meta_votes(peer_index, final_meta_votes);
             }

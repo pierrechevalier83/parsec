@@ -100,11 +100,12 @@ impl MetaVote {
     /// Finalize temporary meta-votes.
     pub fn next_final(
         temp: &[MetaVote],
+        others: &[&[MetaVote]],
         coin_tosses: &BTreeMap<usize, bool>,
         total_peers: usize,
         is_voter: bool,
     ) -> Vec<Self> {
-        Self::next_votes(temp, &[], coin_tosses, total_peers, is_voter)
+        Self::next_votes(temp, others, coin_tosses, total_peers, is_voter)
     }
 
     fn next_votes(
