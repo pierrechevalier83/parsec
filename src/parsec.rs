@@ -1063,6 +1063,11 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
 
         let voters = self.voters();
         let is_voter = voters.contains(builder.event().creator());
+        if !is_voter {
+            // This event wasn't created by a valid voter. It has no meta_votes.
+            return Ok(());
+        }
+
         let ancestors_meta_votes =
             self.other_voting_ancestors_meta_votes(&voters, &builder.event());
 
@@ -1086,12 +1091,8 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
             let temp_votes = parent_meta_votes
                 .into_iter()
                 .map(|(peer_index, parent_votes)| {
-                    let temp_votes = MetaVote::next_temp(
-                        parent_votes,
-                        &other_votes[&peer_index],
-                        voters.len(),
-                        is_voter,
-                    );
+                    let temp_votes =
+                        MetaVote::next_temp(parent_votes, &other_votes[&peer_index], voters.len());
 
                     (peer_index, temp_votes)
                 })
@@ -1109,7 +1110,6 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                     &other_votes[&peer_index],
                     &coin_tosses,
                     voters.len(),
-                    is_voter,
                 );
 
                 builder.add_meta_votes(peer_index, final_meta_votes);
@@ -1121,7 +1121,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                     let other_votes = Self::peer_meta_votes(&ancestors_meta_votes, peer_index);
                     let initial_estimate = builder.has_observee(peer_index);
 
-                    MetaVote::new(initial_estimate, &other_votes, voters.len(), is_voter)
+                    MetaVote::new(initial_estimate, &other_votes, voters.len())
                 };
 
                 builder.add_meta_votes(peer_index, new_meta_votes);

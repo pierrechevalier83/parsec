@@ -26,13 +26,8 @@ pub(crate) struct MetaVoteCounts {
 impl MetaVoteCounts {
     // Construct a `MetaVoteCounts` by collecting details from all meta votes which are for the
     // given `parent`'s `round` and `step`.  These results will include info from our own `parent`
-    // meta vote, if `is_voter` is true.
-    pub fn new(
-        parent: &MetaVote,
-        others: &[&[MetaVote]],
-        total_peers: usize,
-        is_voter: bool,
-    ) -> Self {
+    // meta vote.
+    pub fn new(parent: &MetaVote, others: &[&[MetaVote]], total_peers: usize) -> Self {
         let mut counts = MetaVoteCounts::default();
         counts.total_peers = total_peers;
         for vote in others
@@ -43,7 +38,7 @@ impl MetaVoteCounts {
                     .filter(|vote| vote.round_and_step() == parent.round_and_step())
                     .last()
             })
-            .chain(if is_voter { Some(parent) } else { None })
+            .chain(Some(parent))
         {
             if vote.estimates.contains(true) {
                 counts.estimates_true += 1;
