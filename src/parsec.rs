@@ -41,7 +41,7 @@ use itertools::Itertools;
 #[cfg(any(test, feature = "testing"))]
 use std::ops::{Deref, DerefMut};
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     iter,
     marker::PhantomData,
     mem, usize,
@@ -1076,12 +1076,22 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
             //    coin toss results.
             // The reason to do it this way is that sometimes we need the meta-votes for the current
             // event when tossing the coins.
+            let other_votes = parent_meta_votes
+                .into_iter()
+                .map(|(peer_index, _)| {
+                    let other_votes = Self::peer_meta_votes(&ancestors_meta_votes, peer_index);
+                    (peer_index, other_votes)
+                })
+                .collect::<HashMap<_, _>>();
             let temp_votes = parent_meta_votes
                 .into_iter()
                 .map(|(peer_index, parent_votes)| {
-                    let other_votes = Self::peer_meta_votes(&ancestors_meta_votes, peer_index);
-                    let temp_votes =
-                        MetaVote::next_temp(parent_votes, &other_votes, voters.len(), is_voter);
+                    let temp_votes = MetaVote::next_temp(
+                        parent_votes,
+                        &other_votes[&peer_index],
+                        voters.len(),
+                        is_voter,
+                    );
 
                     (peer_index, temp_votes)
                 })
@@ -1093,11 +1103,10 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
             };
 
             for (peer_index, temp_votes) in &context.temp_votes {
-                let other_votes = Self::peer_meta_votes(&ancestors_meta_votes, peer_index);
                 let coin_tosses = self.toss_coins(&voters, peer_index, temp_votes, &context)?;
                 let final_meta_votes = MetaVote::next_final(
                     temp_votes,
-                    &other_votes,
+                    &other_votes[&peer_index],
                     &coin_tosses,
                     voters.len(),
                     is_voter,
